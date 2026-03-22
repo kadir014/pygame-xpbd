@@ -114,6 +114,11 @@ class _PressureSoftBody:
     rest_area: float
     k: float
 
+@dataclass
+class _RegularSoftBody:
+    """ Proxy for a regular soft-body. """
+    particles: list[Particle]
+
 
 def solve_particle_x_particle(a: Particle, b: Particle, dt: float) -> None:
     """
@@ -151,9 +156,48 @@ def solve_particle_x_particle(a: Particle, b: Particle, dt: float) -> None:
     b.position -= w2 * correction
 
 
-def solve_particle_x_edge(a: Particle, b1: Particle, b2: Particle, dt: float) -> None:
+def solve_particle_x_edge(p: Particle, const: DistanceConstraint, dt: float) -> None:
+    b1 = const.a
+    b2 = const.b
+
     thickness = max(b1.mass, b2.mass)
-    ... # TODO
+
+    edge = b1.position - b2.position
+    t = (p.position - b2.position).dot(edge) / edge.dot(edge)
+    t = pygame.math.clamp(t, 0.0, 1.0)
+
+    # closest point on edge
+    o = b2.position + t * edge
+
+    delta = p.position - o
+    dist = delta.length()
+
+    C = dist - (thickness + p.mass)
+
+    if C >= 0:
+        return
+
+    if dist == 0:
+        n = degenerate_vector()
+    else:
+        n = delta / dist
+
+    # dont forget: using the barycentric coord (t) to spread the push creates torque
+    wa = p.inv_mass
+    wb1 = b1.inv_mass * (t)
+    wb2 = b2.inv_mass * (1.0 - t)
+
+    alpha = 0.0 # hard constraint
+    alpha_term = alpha / (dt * dt)
+
+    # Same problem as particle x particle
+    lambda_ = (-C) / (wa + wb1 + wb2 + alpha_term)
+
+    correction = lambda_ * n
+
+    p.position += wa * correction
+    b1.position -= wb1 * correction
+    b2.position -= wb2 * correction
 
 
 # TODO: GENERALIZE CONSTRAINTS INSTEAD OF 30 DIFFERENT FUNCTIONS
@@ -197,6 +241,7 @@ class XPBDSpace:
         self._consts: list[DistanceConstraint] = []
         self._particles: list[Particle] = []
         self._pressures: list[_PressureSoftBody] = []
+        self._softbodies: list[_RegularSoftBody] = []
 
         self.gravity = Vector2(0.0, 9.81)
         self.domain = pygame.FRect(0.0, 0.0, 50.0, 50.0)
@@ -210,6 +255,11 @@ class XPBDSpace:
         """ Iterate over a shallow copy of constraints. """
         for c in self._consts.copy():
             yield c
+
+    def iter_softbodies(self) -> Iterator[_RegularSoftBody]:
+        """ Iterate over a shallow copy of soft body proxies. """
+        for pb in self._softbodies.copy():
+            yield pb
 
     def add_particle(self, p: Particle) -> None:
         """ Add a new particle. """
@@ -293,6 +343,8 @@ class XPBDSpace:
                     # Inside edges should be weaker than outline faces
                     self.add_constraint(DistanceConstraint(p1, p2, rest_length, alpha * 5.0))
 
+        self._softbodies.append(_RegularSoftBody(local_particles))
+
         return local_particles
     
     def add_pressure_softbody(self,
@@ -301,7 +353,7 @@ class XPBDSpace:
             radius: float,
             alpha: float,
             rest_area: float = 30.0,
-            pressure_value: float = 3.0,
+            pressure_value: float = 50.0,
             mass: float = 1.0,
             ) -> _PressureSoftBody:
         """
@@ -432,6 +484,14 @@ class XPBDSpace:
                         if not a.collidable or not b.collidable: continue
 
                         solve_particle_x_particle(a, b, sdt)
+
+                # Particle x Edge
+                for a in self._particles:
+                    for c in self._consts:
+                        if a is c.a or a is c.b: continue
+                        if not a.collidable or not c.a.collidable or not c.b.collidable: continue
+
+                        solve_particle_x_edge(a, c, sdt) 
 
                 # Distance constraints
                 for c in self._consts:

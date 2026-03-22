@@ -1,5 +1,9 @@
+from typing import Callable
+
 from pygame import Vector2
 
+
+SplineFunc = Callable[[Vector2, Vector2, Vector2, Vector2, float], Vector2]
 
 def catmull_rom(
         p0: Vector2,
@@ -23,30 +27,53 @@ def catmull_rom(
 
     return Vector2(x, y)
 
+def cubic_bezier_decasteljau(
+        p0: Vector2,
+        p1: Vector2,
+        p2: Vector2,
+        p3: Vector2,
+        t: float
+        ) -> Vector2:
+    v0 = Vector2(p0)
+    v1 = Vector2(p1)
+    v2 = Vector2(p2)
+    v3 = Vector2(p3)
+
+    a = v0.lerp(v1, t)
+    b = v1.lerp(v2, t)
+    c = v2.lerp(v3, t)
+    d = a.lerp(b, t)
+    e = b.lerp(c, t)
+    p = d.lerp(e, t)
+
+    return p
+
 def spline_segment(
+        func: SplineFunc,
         p0: Vector2,
         p1: Vector2,
         p2: Vector2,
         p3: Vector2,
         steps: int
         ) -> list[Vector2]:
-    """ Generate points for a single Catmull-Rom spline segment. """
+    """ Generate points for a single spline segment. """
 
     points = []
     # +1 so lines are closed at nodes
     for step in range(steps + 1):
         t = step / steps
 
-        points.append(catmull_rom(p0, p1, p2, p3, t))
+        points.append(func(p0, p1, p2, p3, t))
 
     return points[:-1]
 
 def spline_loop(
+        func: SplineFunc,
         points: list[Vector2],
-        segment_steps: int = 25
+        segment_steps: int = 25,
         ) -> list[Vector2]:
     """
-    Return the generated points over a Catmull-Rom spline for given points.
+    Return the generated points over a spline for given control points.
 
     Parameters
     ----------
@@ -61,6 +88,7 @@ def spline_loop(
     
     for i in range(n):
         looped_points += spline_segment(
+            func,
             points[i],
             points[(i + 1) % n],
             points[(i + 2) % n],
